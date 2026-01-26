@@ -4,7 +4,7 @@ import math
 from .ray import Ray
 
 class Camera:
-    def __init__(self, eye, look_at, up, fov, aspect_ratio, img_width, img_height):
+    def __init__(self, eye, look_at, up, fov, img_width, img_height):
         self.eye = eye
         # self.look_at = look_at
         # self.up = up
@@ -13,14 +13,16 @@ class Camera:
         self.img_width = img_width
         self.img_height = img_height
 
-        self.su = math.tan(math.radians(fov) / 2) * aspect_ratio
-        self.sv = math.tan(math.radians(fov) / 2)
+        aspect_ratio = img_height / img_width
 
-        print(type(self.eye), type(look_at), type(up))
+        self.su = 2 * math.tan(math.radians(fov) / 2)
+        self.sv = self.su * aspect_ratio
+
         self.w = (eye - look_at).normalize()
         up = up.normalize()
-        self.u = self.w.cross(up).normalize()
-        self.v = self.u.cross(self.w).normalize()
+        #self.u = self.w.cross(up).normalize()
+        self.u = up.cross(self.w).normalize()
+        self.v = self.w.cross(self.u).normalize()
 
     def point_image2world(self, x, y):
         # from image coordinates to coordinates 

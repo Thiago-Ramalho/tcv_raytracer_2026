@@ -27,3 +27,6 @@ output.png
 # Misc
 *.log
 .vscode/settings.json
+*.o
+*.so
+*.egg-info
