@@ -43,3 +43,23 @@ class Vector3D:
 
     def __neg__(self) -> 'Vector3D':
         return self.__class__(-self.x, -self.y, -self.z)
+    
+    def __getitem__(self, index: int) -> float:
+        if index == 0:
+            return self.x
+        elif index == 1:
+            return self.y
+        elif index == 2:
+            return self.z
+        else:
+            raise IndexError("Vector3D index out of range (must be 0, 1, or 2)")
+    
+    def __setitem__(self, index: int, value: float):
+        if index == 0:
+            self.x = value
+        elif index == 1:
+            self.y = value
+        elif index == 2:
+            self.z = value
+        else:
+            raise IndexError("Vector3D index out of range (must be 0, 1, or 2)")

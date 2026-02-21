@@ -1,5 +1,6 @@
 from src.vector3d import Vector3D
 from .base import Shape, HitRecord, CastEpsilon
+import numpy as np
 
 class Ball(Shape):
     def __init__(self, center, radius):
@@ -31,6 +32,57 @@ class Ball(Shape):
                     normal = (point - self.center).normalize()
 
             return HitRecord(hit, t, point, normal)
+
+class Cube(Shape):
+    def __init__(self, edge_size):
+        super().__init__("cube")
+        self.edge_size = edge_size
+
+    def hit(self, ray):
+        # Intersection between a ray and a cube centered at the origin
+        half_edge = self.edge_size / 2
+        tmin = float('-inf')
+        tmax = float('inf')
+
+        for i in range(3):
+        # Iterating over x, y and z axes
+            if abs(ray.direction[i]) < 1e-6:
+            # Checking if ray direction is orthogonal to the ith axis
+                if ray.origin[i] < -half_edge or ray.origin[i] > half_edge:
+                # If it's orthogonal, it can only touch the cube if the
+                # ith component is between -half_edge and +half_edge
+                    return HitRecord(False, float('inf'), None, None)
+            else:
+                # Distances from ray origin to the two face/planes that are normal to i axis
+                t1 = (-half_edge - ray.origin[i]) / ray.direction[i]
+                t2 = (half_edge - ray.origin[i]) / ray.direction[i]
+
+                # Updating tmin and tmax to get a more restrict interval
+                tmin = max(tmin, min(t1, t2))
+                tmax = min(tmax, max(t1, t2))
+                
+                if tmin > tmax:
+                # If the limits are inverted, the interval is empty (no intersection)
+                    return HitRecord(False, float('inf'), None, None)
+        
+        # Minimum distance threshold to avoid auto-intersection for secondary rays
+        if tmin < CastEpsilon:
+            return HitRecord(False, float('inf'), None, None)
+
+        point = ray.point_at_parameter(tmin)
+        normal = Vector3D(0, 0, 0)
+        
+        # Determining which face was hit to calculate the normal
+        for i in range(3):
+            if abs(point[i] - (-half_edge)) < 1e-6:
+                normal[i] = -1
+                break
+            elif abs(point[i] - half_edge) < 1e-6:
+                normal[i] = 1
+                break
+
+        return HitRecord(True, tmin, point, normal)
+
 
 class Plane(Shape):
     def __init__(self, point, normal):
