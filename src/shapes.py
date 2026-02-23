@@ -1,6 +1,6 @@
 from src.vector3d import Vector3D
 from .base import Shape, HitRecord, CastEpsilon
-import numpy as np
+import math
 
 class Ball(Shape):
     def __init__(self, center, radius):
@@ -120,8 +120,8 @@ class Cylinder(Shape):
         # Delta < 0 means no roots and thus no intersection at all with the cylinder
             return HitRecord(False, float('inf'), None, None)
 
-        t0 = (-b - np.sqrt(delta)) / (2*a)
-        t1 = (-b + np.sqrt(delta)) / (2*a)
+        t0 = (-b - math.sqrt(delta)) / (2*a)
+        t1 = (-b + math.sqrt(delta)) / (2*a)
 
         # Sorting the two points so t0 marks the closest intersection
         if t1 < t0:
