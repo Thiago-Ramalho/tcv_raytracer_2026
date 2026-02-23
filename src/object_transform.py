@@ -71,8 +71,9 @@ class ObjectTransform(Shape):
         )
         world_normal = world_normal.normalize()
 
-        # We now reuse the same t parameter for the unstransformed ray
-        world_t = object_hit.t
+        # Recompute t in world space so distances match the original ray
+        ray_to_point = world_point - ray.origin
+        world_t = ray_to_point.dot(ray.direction)
 
         # We still check if t meets the CastEpsilon requirement
         if world_t <= CastEpsilon:
