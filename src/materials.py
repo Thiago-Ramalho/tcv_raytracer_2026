@@ -197,3 +197,45 @@ class TranslucidMaterial(SimpleMaterial):
         shaded_color += transmitted_color
 
         return shaded_color
+
+
+class MirrorMaterial(Material):
+    def __init__(
+        self,
+        reflection_coefficient: float = 1.0,
+        decay_per_bounce: float = 0.9,
+        tint_color: Color = None,
+        tint_strength: float = 0.3,
+    ):
+        super().__init__()
+        self.reflection_coefficient = reflection_coefficient
+        # Multiplied at each bounce to darken successive reflections.
+        self.decay_per_bounce = decay_per_bounce
+        # Optional tint applied to reflections.
+        self.tint_color = tint_color
+        self.tint_strength = tint_strength
+
+    def shade(self, hit_record, scene):
+        # Purely specular reflection (mirror)
+        if hit_record.ray.depth >= scene.max_depth:
+            return scene.background
+
+        incident_dir = hit_record.ray.direction
+        normal = hit_record.normal
+        if incident_dir.dot(normal) > 0:
+            normal = -normal
+
+        reflect_dir = (incident_dir - normal * 2 * incident_dir.dot(normal)).normalize()
+        reflect_ray = Ray(hit_record.point + normal * CastEpsilon, reflect_dir, hit_record.ray.depth + 1)
+        reflect_hit = scene.hit(reflect_ray)
+        decay = self.reflection_coefficient * self.decay_per_bounce
+        if reflect_hit.hit:
+            reflected = reflect_hit.material.shade(reflect_hit, scene)
+        else:
+            reflected = scene.background
+
+        if self.tint_color is not None:
+            tinted = (reflected @ self.tint_color)
+            reflected = reflected * (1.0 - self.tint_strength) + tinted * self.tint_strength
+
+        return reflected * decay
