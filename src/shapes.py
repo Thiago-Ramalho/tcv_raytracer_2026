@@ -182,9 +182,256 @@ class PlaneUV(Shape):
         return HitRecord(False, float('inf'), None, None)
 
 class ImplicitFunction(Shape):
-    def __init__(self, function):
+    def __init__(
+        self,
+        function,
+        gradient=None,
+        bbox_min=None,
+        bbox_max=None,
+        max_depth=24,
+        t_epsilon=1e-4,
+        grad_similarity=0.95,
+        f_epsilon=1e-5,
+        sample_count=128,
+    ):
         super().__init__("implicit_function")
+        # Function f(x, y, z) defining the implicit surface f = 0.
         self.func = function
+        # Gradient of f, used for normals.
+        self.gradient = gradient
+        # Axis-aligned bounding box limits.
+        self.bbox_min = bbox_min
+        self.bbox_max = bbox_max
+        # Search controls to balance quality and speed.
+        self.max_depth = max_depth
+        self.t_epsilon = t_epsilon
+        self.grad_similarity = grad_similarity
+        self.f_epsilon = f_epsilon
+        self.sample_count = sample_count
 
     def in_out(self, point):
+        # Inside if f <= 0, outside if f > 0.
         return self.func(point) <= 0
+
+    def _ray_box_intersection(self, ray):
+        # Fast reject using the bounding box.
+        if self.bbox_min is None or self.bbox_max is None:
+            return None
+
+        tmin = float("-inf")
+        tmax = float("inf")
+
+        # Slab intersection for x, y, z.
+        for i in range(3):
+            direction = ray.direction[i]
+            origin = ray.origin[i]
+            if abs(direction) < 1e-8:
+                # Ray is parallel to slab; it must be inside to intersect.
+                if origin < self.bbox_min[i] or origin > self.bbox_max[i]:
+                    return None
+                continue
+
+            # Intersect with the two planes of the slab.
+            inv_d = 1.0 / direction
+            t0 = (self.bbox_min[i] - origin) * inv_d
+            t1 = (self.bbox_max[i] - origin) * inv_d
+            if t0 > t1:
+                t0, t1 = t1, t0
+
+            # Narrow the valid interval.
+            tmin = max(tmin, t0)
+            tmax = min(tmax, t1)
+            if tmin > tmax:
+                return None
+
+        return tmin, tmax
+
+    def _gradient(self, point):
+        # Gradient is optional but required for normals.
+        if self.gradient is None:
+            return None
+        return self.gradient(point)
+
+    def _grad_similar(self, grad_a, grad_b):
+        # Compare gradient directions to ensure a stable normal.
+        if grad_a is None or grad_b is None:
+            return True
+        try:
+            na = grad_a.normalize()
+            nb = grad_b.normalize()
+        except ValueError:
+            return False
+        return na.dot(nb) >= self.grad_similarity
+
+    def _search_interval(self, ray, t0, t1, f0, f1, depth):
+        # Bisection within a bracketed sign change.
+        if t1 < CastEpsilon:
+            return None
+
+        # Early accept if we are already close to the surface.
+        if abs(f0) <= self.f_epsilon:
+            return t0
+        if abs(f1) <= self.f_epsilon:
+            return t1
+
+        if depth <= 0:
+            return None
+
+        # No sign change, no root in this interval.
+        if f0 * f1 > 0:
+            return None
+
+        # If interval is tiny, validate by gradient similarity.
+        if abs(t1 - t0) <= self.t_epsilon:
+            grad0 = self._gradient(ray.point_at_parameter(t0))
+            grad1 = self._gradient(ray.point_at_parameter(t1))
+            if self._grad_similar(grad0, grad1):
+                return 0.5 * (t0 + t1)
+            return None
+
+        # Bisect the interval.
+        tm = 0.5 * (t0 + t1)
+        fm = self.func(ray.point_at_parameter(tm))
+        if f0 * fm <= 0:
+            return self._search_interval(ray, t0, tm, f0, fm, depth - 1)
+        return self._search_interval(ray, tm, t1, fm, f1, depth - 1)
+
+    def hit(self, ray):
+        # Intersect ray with bounding box, then search for f = 0.
+        box_hit = self._ray_box_intersection(ray)
+        if box_hit is None:
+            return HitRecord(False, float("inf"), None, None)
+
+        t_enter, t_exit = box_hit
+        if t_exit < CastEpsilon:
+            return HitRecord(False, float("inf"), None, None)
+
+        # Clamp start to avoid self-intersections.
+        t0 = max(t_enter, CastEpsilon)
+        t1 = t_exit
+
+        # Coarse sampling to find a sign change interval quickly.
+        steps = max(self.sample_count, 1)
+        dt = (t1 - t0) / steps
+        t_prev = t0
+        f_prev = self.func(ray.point_at_parameter(t_prev))
+        best_t = t_prev
+        best_f = abs(f_prev)
+        bracket = None
+
+        # Scan for the first sign change; keep best near-zero sample.
+        for i in range(1, steps + 1):
+            t_curr = t0 + dt * i
+            f_curr = self.func(ray.point_at_parameter(t_curr))
+            abs_f = abs(f_curr)
+            if abs_f < best_f:
+                best_f = abs_f
+                best_t = t_curr
+
+            if f_prev * f_curr <= 0:
+                bracket = (t_prev, t_curr, f_prev, f_curr)
+                break
+
+            t_prev = t_curr
+            f_prev = f_curr
+
+        # If no sign change, accept only if we got very close to f = 0.
+        if bracket is None:
+            if best_f <= self.f_epsilon:
+                t_hit = best_t
+            else:
+                return HitRecord(False, float("inf"), None, None)
+        else:
+            # Refine the bracket with bisection.
+            t_hit = self._search_interval(
+                ray,
+                bracket[0],
+                bracket[1],
+                bracket[2],
+                bracket[3],
+                self.max_depth,
+            )
+        if t_hit is None:
+            return HitRecord(False, float("inf"), None, None)
+
+        # Compute hit point and normal from gradient.
+        point = ray.point_at_parameter(t_hit)
+        grad = self._gradient(point)
+        if grad is None:
+            return HitRecord(False, float("inf"), None, None)
+        # Normal from gradient.
+        normal = grad.normalize()
+        return HitRecord(True, t_hit, point, normal)
+
+
+class MitchellSurface(ImplicitFunction):
+    def __init__(self, max_depth=16, t_epsilon=1e-3, grad_similarity=0.95):
+        # Bounding box for the Mitchell surface.
+        super().__init__(
+            function=self._func,
+            gradient=self._grad,
+            bbox_min=Vector3D(-2, -2, -2),
+            bbox_max=Vector3D(2, 2, 2),
+            max_depth=max_depth,
+            t_epsilon=t_epsilon,
+            grad_similarity=grad_similarity,
+        )
+
+    def _func(self, point):
+        x = point.x
+        y = point.y
+        z = point.z
+        yz2 = y * y + z * z
+        x2 = x * x
+        term = x2 * yz2
+        return 4 * (x**4 + (yz2 * yz2) + 17 * term) - 20 * (x2 + yz2) + 17
+
+    def _grad(self, point):
+        x = point.x
+        y = point.y
+        z = point.z
+        yz2 = y * y + z * z
+        x2 = x * x
+
+        fx = 16 * (x**3) + 136 * x * yz2 - 40 * x
+        fy = 16 * y * yz2 + 136 * x2 * y - 40 * y
+        fz = 16 * z * yz2 + 136 * x2 * z - 40 * z
+        return Vector3D(fx, fy, fz)
+
+
+class HeartSurface(ImplicitFunction):
+    def __init__(self, max_depth=16, t_epsilon=1e-3, grad_similarity=0.95):
+        # Bounding box for the heart surface.
+        super().__init__(
+            function=self._func,
+            gradient=self._grad,
+            bbox_min=Vector3D(-1.5, -1.5, -1.5),
+            bbox_max=Vector3D(1.5, 1.5, 1.5),
+            max_depth=max_depth,
+            t_epsilon=t_epsilon,
+            grad_similarity=grad_similarity,
+        )
+
+    def _func(self, point):
+        x = point.x
+        y = point.y
+        z = point.z
+        x2 = x * x
+        y2 = y * y
+        z2 = z * z
+        a = x2 + (9.0 / 4.0) * y2 + z2 - 1
+        return (a**3) - (x2 * z**3) - ((9.0 / 80.0) * y2 * z**3)
+
+    def _grad(self, point):
+        x = point.x
+        y = point.y
+        z = point.z
+        x2 = x * x
+        y2 = y * y
+        z2 = z * z
+        a = x2 + (9.0 / 4.0) * y2 + z2 - 1
+
+        fx = 6 * x * (a**2) - 2 * x * (z**3)
+        fy = (27.0 / 2.0) * y * (a**2) - (9.0 / 40.0) * y * (z**3)
+        fz = 6 * z * (a**2) - 3 * x2 * z2 - (27.0 / 80.0) * y2 * z2
+        return Vector3D(fx, fy, fz)
