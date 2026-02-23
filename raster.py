@@ -18,6 +18,7 @@ class Context:
 def render_pixel(context, ij):
     i, j = ij
     pixel = Color(0, 0, 0)
+    total_rays = 0
     for _ in range(context.num_samples):
         # random offset for anti-aliasing
         dx = np.random.uniform(-0.5, 0.5)
@@ -25,20 +26,21 @@ def render_pixel(context, ij):
         # middle of pixel coordinates
         x = j + 0.5 + dx
         y = i + 0.5 + dy
-        # ray from camera
-        ray = context.camera.ray(x, y)
-        # hit ray with scene
-        hit_rec = context.scene.hit(ray)
-        # test if hit something
-        if hit_rec.hit:
-            # Simple shading: use the red channel as intensity
-            material = hit_rec.material
-            shaded_color = material.shade(hit_rec, context.scene)
-            # this is box filtering!
-            pixel = pixel + shaded_color / context.num_samples
-        else:
-            # this is box filtering!
-            pixel = pixel + context.scene.background / context.num_samples
+        # rays from camera (supports depth of field)
+        rays = context.camera.rays(x, y)
+        total_rays += len(rays)
+        for ray in rays:
+            # hit ray with scene
+            hit_rec = context.scene.hit(ray)
+            # test if hit something
+            if hit_rec.hit:
+                material = hit_rec.material
+                shaded_color = material.shade(hit_rec, context.scene)
+                pixel = pixel + shaded_color
+            else:
+                pixel = pixel + context.scene.background
+    if total_rays > 0:
+        pixel = pixel / total_rays
     return (i, j, pixel)
 
 def main(args, pool):
